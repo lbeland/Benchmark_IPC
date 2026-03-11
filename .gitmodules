@@ -1,0 +1,18 @@
+[submodule "bifrost"]
+	path = bifrost
+	url = https://github.com/lbeland/bifrost.git
+[submodule "brand-tutorial"]
+	path = brand-tutorial
+	url = https://github.com/lbeland/brand-tutorial.git
+[submodule "dareplane"]
+	path = dareplane
+	url = https://github.com/lbeland/dareplane.git
+[submodule "falcon-core-develop"]
+	path = falcon-core-develop
+	url = https://github.com/lbeland/falcon-core-develop.git
+[submodule "licorice"]
+	path = licorice
+	url = https://github.com/lbeland/licorice.git
+[submodule "zeromq_diy"]
+	path = zeromq_diy
+	url = https://github.com/lbeland/zeromq_diy.git
