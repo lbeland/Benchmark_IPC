@@ -40,7 +40,7 @@ for sub in SUBFOLDERS:
             num_channels, msg_size, type_ = match.groups()
             num_channels = int(num_channels)
             msg_size = int(msg_size)
-            total_size = num_channels * msg_size
+            total_size = num_channels * msg_size * 8  # Assuming float64 (8 bytes) per channel
             
             try:
                 df = pd.read_csv(os.path.join(results_dir, file))
@@ -161,21 +161,23 @@ else:
     
     # Create figure with 4 subplots
     fig, axes = plt.subplots(4, 1, figsize=(12, 14), sharex=True)
+
+    cross_x = 80000 * 8 # Corresponds to msg_size 2000 and num_channels 40
     
     plot_metric(axes[0], "throughput", "Throughput (msg/ms)")
     axes[0].axhline(y=10, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[0].axvline(x=80000, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    axes[0].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
     plot_metric(axes[1], "latency", "Latency (µs)")
     axes[1].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[1].axvline(x=80000, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    axes[1].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
     plot_metric(axes[2], "recv_period", "Receive Period (µs)")
     axes[2].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[2].axvline(x=80000, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    axes[2].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
     plot_metric(axes[3], "send_period", "Send Period (µs)")
     axes[3].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[3].axvline(x=80000, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    axes[3].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
     
-    axes[3].set_xlabel("Total Payload Size (num_channels × msg_size)", fontsize=11, fontweight='bold')
+    axes[3].set_xlabel("Total Payload Size (Bytes)", fontsize=11, fontweight='bold')
     
     # Create combined legend
     handles, labels = axes[0].get_legend_handles_labels()
