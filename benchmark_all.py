@@ -76,17 +76,17 @@ def main():
             # print(f"Running benchmarks Bifrost: channels={num_channels}, msg_size={msg_size}")
             # run_benchmark("./bifrost", "venv", num_channels, msg_size)
             
-            # print(f"Running benchmarks Zeromq_diy: channels={num_channels}, msg_size={msg_size}")
-            # run_benchmark("./zeromq_diy", "venv", num_channels, msg_size)
+            print(f"Running benchmarks Zeromq_diy: channels={num_channels}, msg_size={msg_size}")
+            run_benchmark("./zeromq_diy", "venv", num_channels, msg_size)
             
-            print(f"Running benchmarks Dareplane: channels={num_channels}, msg_size={msg_size}")
-            run_benchmark("./dareplane", "venv", num_channels, msg_size)
+            # print(f"Running benchmarks Dareplane: channels={num_channels}, msg_size={msg_size}")
+            # run_benchmark("./dareplane", "venv", num_channels, msg_size)
             
             # print(f"Running benchmarks Brand-tutorial: channels={num_channels}, msg_size={msg_size}")
             # run_benchmark("./brand-tutorial", "rt", num_channels, msg_size)
             
-            # print(f"Running benchmarks Falcon: channels={num_channels}, msg_size={msg_size}")
-            # run_benchmark("./falcon-core-develop", "venv", num_channels, msg_size)
+            print(f"Running benchmarks Falcon: channels={num_channels}, msg_size={msg_size}")
+            run_benchmark("./falcon-core-develop", "venv", num_channels, msg_size)
 
 
 if __name__ == "__main__":
