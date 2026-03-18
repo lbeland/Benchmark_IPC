@@ -14,7 +14,7 @@ import time
 N_MESSAGES = 1000
 NUM_CHANNELS_LIST = [1, 5, 20, 40]
 MSG_SIZES = [1, 128, 256, 512, 1024, 2048, 4096]
-MAX_BUFFER = 10
+MAX_BUFFER = 16 # because falcon always uses power of 2
 OVERWRITE = False
 
 
