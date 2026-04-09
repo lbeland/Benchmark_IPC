@@ -2,10 +2,13 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import re
 
 BASE_DIR = "./"
 SUBFOLDERS = ["bifrost", "zeromq_diy", "brand-tutorial", "dareplane", "falcon-core-develop"]
+# SUBFOLDERS = ["zeromq_diy", "falcon-core-develop"]
+
 data_records = []
 
 # Updated pattern to match: num_channels_msg_size_[Consumer|Producer].csv
@@ -19,14 +22,46 @@ SYSTEM_COLORS = {
     "falcon-core-develop": "tab:purple"
 }
 
+SYSTEM_LABELS = {
+    "bifrost": "Bifrost",
+    "dareplane": "Dareplane",
+    "brand-tutorial": "BRAND",
+    "zeromq_diy": "ZeroMQ",
+    "falcon-core-develop": "Falcon",
+}
+
 def mad(data, axis=None):
     """Mean absolute deviation"""
     return np.mean(np.abs(data - np.mean(data, axis)), axis)
 
+
+def logspace_error_from_mean_std(mean, std):
+    """Convert linear mean/std into asymmetric error bars suitable for a log axis."""
+    mean = np.asarray(mean, dtype=float)
+    std = np.asarray(std, dtype=float)
+
+    yerr_lower = np.zeros_like(mean)
+    yerr_upper = np.zeros_like(mean)
+
+    valid = (mean > 0) & (std > 0)
+    if np.any(valid):
+        # Approximate the spread as log-normal so the interval remains positive
+        # and visually symmetric on a logarithmic axis.
+        log_sigma = np.sqrt(np.log1p((std[valid] / mean[valid]) ** 2))
+        log_mu = np.log(mean[valid]) - 0.5 * log_sigma**2
+        lower = np.exp(log_mu - log_sigma)
+        upper = np.exp(log_mu + log_sigma)
+        yerr_lower[valid] = np.maximum(mean[valid] - lower, 0)
+        yerr_upper[valid] = np.maximum(upper - mean[valid], 0)
+
+    return np.vstack([yerr_lower, yerr_upper])
+
 # Load mean and std per file
 for sub in SUBFOLDERS:
     # Check both results folders: Python and C implementations
-    for results_folder, impl_type in [("results", "Python"), ("c_results", "C"),("rt_results", "Python_RT"),("rt_c_results", "C_RT")]:
+    for results_folder, impl_type in [("rt_results", "Python"),("rt_c_results", "C")]:
+    # for results_folder, impl_type in [("eike_rt_results", "Eike - Python"), ("eike_rt_c_results", "Eike - C"),("rt_results", "Linda - Python_RT"),("rt_c_results", "Linda - C_RT")]:
+
         results_dir = os.path.join(BASE_DIR, sub, results_folder)
         if not os.path.exists(results_dir):
             print(f"Skipping {results_dir} - not found")
@@ -114,6 +149,13 @@ else:
                     continue
                 
                 df_plot = df_sys.sort_values("total_size")
+
+                # if there are multiple records for one size, take mean and std across them
+                # df_plot = df_plot.groupby("total_size").agg({
+                #     "mean": "mean",
+                #     "std": "mean",
+                #     "max": "mean"
+                # }).reset_index()
                 
                 x = df_plot["total_size"].values
                 y_mean = df_plot["mean"].values
@@ -126,33 +168,32 @@ else:
                     linestyle = "-"
                 elif impl == "C":
                     marker = "s"
-                    linestyle = "-"
-                elif impl == "Python_RT":
-                    marker = "o"
-                    linestyle = ":"
-                elif impl == "C_RT":
-                    marker = "s"
-                    linestyle = ":"
-                
-                # Plot mean line
+                    linestyle = "--"
+
                 ax.plot(
                     x, y_mean,
                     color=color,
                     marker=marker,
                     linestyle=linestyle,
-                    label=f"{system} ({impl})",
-                    linewidth=2,
-                    markersize=6
+                    linewidth=1.5,
+                    markersize=5,
                 )
                 
-                # Plot error band (std)
-                ax.fill_between(
-                    x,
-                    y_mean - y_std,
-                    y_mean + y_std,
-                    color=color,
-                    alpha=0.15
-                )
+                # # Plot mean line with asymmetric error bars scaled for a log axis.
+                # ax.errorbar(
+                #     x,
+                #     y_mean,
+                #     yerr=logspace_error_from_mean_std(y_mean, y_std),
+                #     color=color,
+                #     marker=marker,
+                #     linestyle=linestyle,
+                #     label=f"{system} ({impl})",
+                #     linewidth=1,
+                #     markersize=6,
+                #     capsize=3,
+                #     capthick=1,
+                #     elinewidth=1,
+                # )
         
         ax.set_ylabel(ylabel, fontsize=11, fontweight='bold')
         ax.set_xscale("log")
@@ -160,31 +201,80 @@ else:
         ax.grid(True, which="both", alpha=0.3)
     
     # Create figure with 4 subplots
-    fig, axes = plt.subplots(4, 1, figsize=(12, 14), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
 
     cross_x = 80000 * 8 # Corresponds to msg_size 2000 and num_channels 40
     
-    plot_metric(axes[0], "throughput", "Throughput (msg/ms)")
-    axes[0].axhline(y=10, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[0].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    plot_metric(axes[1], "latency", "Latency (µs)")
+    # plot_metric(axes[0], "throughput", "Throughput (msg/ms)")
+    # axes[0].axhline(y=10, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    # axes[0].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    plot_metric(axes[0], "latency", "Latency (µs)")
+    axes[0].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    # axes[0].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    plot_metric(axes[1], "recv_period", "Receive Period (µs)")
     axes[1].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[1].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    plot_metric(axes[2], "recv_period", "Receive Period (µs)")
+    # axes[1].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    plot_metric(axes[2], "send_period", "Send Period (µs)")
     axes[2].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[2].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    plot_metric(axes[3], "send_period", "Send Period (µs)")
-    axes[3].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    axes[3].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    # axes[2].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
     
-    axes[3].set_xlabel("Total Payload Size (Bytes)", fontsize=11, fontweight='bold')
+    axes[2].set_xlabel("Total Payload Size (Bytes)", fontsize=11, fontweight='bold')
+
+    # Set x lim for all subplots
+    axes[0].set_xlim(5, 8000 * 40 * 8)
+    axes[1].set_xlim(5, 8000 * 40 * 8)
+    axes[2].set_xlim(5, 8000 * 40 * 8)
+
+
+    # Only include systems that are actually present in the data
+    systems_present = [s for s in SUBFOLDERS if s in df_all["system"].unique()]
+
+    # System legend: colors
+    system_handles = [
+        Line2D([0], [0], color=SYSTEM_COLORS[s], lw=2, marker='None',
+               label=SYSTEM_LABELS.get(s, s))
+        for s in systems_present
+    ]
+
+    # Implementation legend: marker/style semantics
+    impl_handles = [
+        Line2D([0], [0], color='black', lw=1.5, marker='o',
+               linestyle='-', markersize=5, label='Python'),
+        Line2D([0], [0], color='black', lw=1.5, marker='s',
+               linestyle='--', markersize=5, label='C/C++'),
+    ]
+
+    legend1 = fig.legend(
+        handles=system_handles,
+        loc='upper left',
+        bbox_to_anchor=(0.83, 0.82),
+        ncol=1,
+        title="System",
+        frameon=True,
+        fontsize=9,
+        title_fontsize=10,
+        borderaxespad=0.0,
+    )
+
+    legend2 = fig.legend(
+        handles=impl_handles,
+        loc='upper left',
+        bbox_to_anchor=(0.83, 0.36),
+        ncol=1,
+        title="Implementation",
+        frameon=True,
+        fontsize=9,
+        title_fontsize=10,
+        borderaxespad=0.0,
+    )
+
+    fig.add_artist(legend1)
+
+    fig.suptitle("IPC Benchmark Results Comparison (Python vs C/C++)",
+                 fontsize=14, fontweight='bold', y=0.995)
+
+    # Leave a dedicated right margin for legends
+    fig.subplots_adjust(left=0.10, right=0.80, top=0.95, bottom=0.08, hspace=0.08)
     
-    # Create combined legend
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.99), 
-               ncol=4, fontsize=8, frameon=True)
-    
-    fig.suptitle("IPC Benchmark Results Comparison (Python vs C)", fontsize=14, fontweight='bold', y=0.995)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-    
+    plt.savefig("ipc_benchmark_comparison.svg", dpi=300)
     plt.show()
