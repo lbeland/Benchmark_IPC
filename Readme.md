@@ -12,7 +12,7 @@ install requirements for plotting:
 
 ## Perform benchmarking:
 ```bash
-sudo python3 benchmark_all.py
+sudo -E python3 benchmark_all.py 
 ```
 sudo is needed so that subprocesses can run with specified priority of 99.
 Use --overwrite if you run multiple times to override old results
