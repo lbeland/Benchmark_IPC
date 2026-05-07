@@ -12,7 +12,7 @@ FALCON_RESULTS = BASE_DIR / "falcon-core-develop" / "rt_c_results"
 
 output_dir = os.path.join(BASE_DIR, "MA_results")
 
-TARGET_MESSAGE_SIZE = 2048
+TARGET_MESSAGE_SIZE = 1
 TARGET_CHANNELS = [1, 5, 20, 40]
 
 FILE_PATTERN = re.compile(r"^(?P<channels>\d+)_(?P<msg_size>\d+)_process_times\.csv$")
@@ -142,7 +142,7 @@ def style_line_axis(ax: plt.Axes, side: str, ylabel: str | None = None) -> None:
     ax.set_yscale("log")
     ax.grid(True, which="major", alpha=0.7, linewidth=0.8)
     ax.grid(True, which="minor", alpha=0.5, linewidth=0.5)
-    ax.spines["top"].set_visible(False)
+    # ax.spines["top"].set_visible(False)
 
 
 def style_hist_axis(ax: plt.Axes, side: str, xlabel: str = "Count") -> None:
@@ -162,7 +162,7 @@ def style_hist_axis(ax: plt.Axes, side: str, xlabel: str = "Count") -> None:
     # ax.grid(True, axis="x", alpha=0.22, linewidth=0.8)
     ax.grid(True, which="major", alpha=0.7, linewidth=0.8)
     ax.grid(True, which="minor", alpha=0.5, linewidth=0.5)
-    ax.spines["top"].set_visible(False)
+    # ax.spines["top"].set_visible(False)
 
 
 def main() -> None:

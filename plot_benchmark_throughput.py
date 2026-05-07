@@ -7,7 +7,7 @@ import re
 
 BASE_DIR = "./"
 output_dir = os.path.join(BASE_DIR, "MA_results")
-SUBFOLDERS = ["bifrost", "zeromq_diy", "brand-tutorial", "dareplane", "falcon-core-develop"]
+SUBFOLDERS = ["bifrost", "zeromq_diy", "brand-tutorial", "dareplane", "falcon-core-develop"] #, "multiprocessing_diy"]
 # SUBFOLDERS = ["zeromq_diy", "falcon-core-develop"]
 
 data_records = []
@@ -22,11 +22,12 @@ SYSTEM_COLORS = {
 }
 
 SYSTEM_LABELS = {
-    "bifrost": "Bifrost",
-    "dareplane": "Dareplane",
-    "brand-tutorial": "BRAND",
+    "bifrost": "Bifrost (Shared Memory)",
+    "dareplane": "Dareplane (LSL-Streams)",
+    "brand-tutorial": "BRAND (Redis)",
     "zeromq_diy": "ZeroMQ",
-    "falcon-core-develop": "Falcon",
+    "falcon-core-develop": "Falcon (Disruptor Buffer)",
+    "multiprocessing_diy": "Multiprocessing"
 }
 
 def mad(data, axis=None):
@@ -170,7 +171,7 @@ for sub in SUBFOLDERS:
                     
                     data_records.append(record_base | {
                         "metric": "throughput",
-                        "mean": float(df.loc[df["Metric"] == "mean", "Throughput"].values[0]),
+                        "mean": float(df.loc[df["Metric"] == "mean", "Throughput"].values[0]) * total_size,
                         "std": 0,
                         "max": 0
                     })
@@ -269,18 +270,17 @@ else:
 
     cross_x = 80000 * 8 # Corresponds to msg_size 2000 and num_channels 40
     
-    # plot_metric(axes[0], "throughput", "Throughput (msg/ms)")
-    # axes[0].axhline(y=10, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    # axes[0].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+    # plot_metric(ax, "throughput", "Throughput (Bytes/ms)")
+    # ax.axhline(y=10, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+
     plot_metric(ax, "latency", "Latency (µs)")
     ax.axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    # axes[0].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+
     # plot_metric(axes[1], "recv_period", "Receive Period (µs)")
     # axes[1].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    # # axes[1].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
+
     # plot_metric(axes[2], "send_period", "Send Period (µs)")
     # axes[2].axhline(y=100, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
-    # axes[2].axvline(x=cross_x, color='black', linestyle='-', linewidth=1.5, alpha=0.7)
     
     ax.set_xlabel("Total Payload Size (Bytes)", fontsize=11, fontweight='bold')
 
@@ -311,7 +311,7 @@ else:
     legend1 = fig.legend(
         handles=system_handles,
         loc='upper left',
-        bbox_to_anchor=(0.83, 0.6),
+        bbox_to_anchor=(0.83, 0.65),
         ncol=1,
         title="System",
         frameon=False,
