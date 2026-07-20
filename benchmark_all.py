@@ -8,8 +8,8 @@ import time
 
 # Configuration
 N_MESSAGES = 10000
-NUM_CHANNELS_LIST = [1, 5, 20, 40]
-MSG_SIZES = [1, 128, 256, 512, 1024, 2048, 4096]
+NUM_CHANNELS_LIST = [1]#, 5, 20, 40]
+MSG_SIZES = [1, 128]#, 256, 512, 1024, 2048, 4096]
 MAX_BUFFER = 16
 T_WAIT = 0.0001
 OVERWRITE = False
@@ -74,8 +74,8 @@ def run_benchmark(directory, venv_name, num_channels, msg_size):
 
     if (dir_path / "c_benchmark.py").exists():
         executables.append(dir_path / "c_benchmark.py")
-    # if (dir_path / "benchmark.py").exists():
-    #     executables.append(dir_path / "benchmark.py")
+    if (dir_path / "benchmark.py").exists():
+        executables.append(dir_path / "benchmark.py")
 
     for exe in executables:
         cmd = [
