@@ -89,10 +89,16 @@ create_venv() {
 
 # bifrost's Python package can't be pip-installed on its own: its setup.py
 # reads bifrost/version/__init__.py, which only exists after `./configure &&
-# make` has run against the vendored source (see bifrost/vendor/bifrost-src).
-# This runs (idempotently) before bifrost's requirements.txt install so that
-# step can succeed. No CUDA toolchain is required for this benchmark — the
-# vendored source is configured with --disable-cuda.
+# make` has run against a checked-out copy of the source — pip's own
+# git+https editable install clones fresh and immediately tries to build,
+# with no hook to run configure/make first. So we clone+build it ourselves
+# into bifrost/vendor/bifrost-src (gitignored, not committed — same pinned
+# commit bifrost/requirements.txt's local -e path points at) before bifrost's
+# requirements.txt install runs. No CUDA toolchain is required for this
+# benchmark — the vendored source is configured with --disable-cuda.
+BIFROST_COMMIT="58df784dc467a2f538035c8d8412d60ce18e8b0a"
+BIFROST_URL="https://github.com/lbeland/bifrost.git"
+
 prepare_bifrost_vendor() {
     local venv_path="$1"
     local src_dir="$ROOT/bifrost/vendor/bifrost-src"
@@ -104,8 +110,11 @@ prepare_bifrost_vendor() {
     fi
 
     if [[ ! -d "$src_dir" ]]; then
-        warn "$src_dir is missing — cannot build bifrost's Python bindings."
-        return 1
+        echo "  cloning bifrost@${BIFROST_COMMIT:0:12} into $src_dir..."
+        mkdir -p "$(dirname "$src_dir")"
+        git clone --quiet "$BIFROST_URL" "$src_dir"
+        git -C "$src_dir" checkout --quiet "$BIFROST_COMMIT"
+        rm -rf "$src_dir/.git"
     fi
 
     echo "  building bifrost (CPU-only, --disable-cuda) to generate Python bindings..."
