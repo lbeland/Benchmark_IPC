@@ -12,8 +12,10 @@ FALCON_RESULTS = BASE_DIR / "falcon-core-develop" / "rt_c_results"
 
 output_dir = os.path.join(BASE_DIR, "MA_results")
 
-TARGET_MESSAGE_SIZE = 1
-TARGET_CHANNELS = [1, 5, 20, 40]
+TARGET_PAYLOADS = [1, 1024, 10240 , 163840 ]
+
+# TARGET_MESSAGE_SIZE = 256
+# TARGET_CHANNELS = [1, 5, 20, 40]
 
 FILE_PATTERN = re.compile(r"^(?P<channels>\d+)_(?P<msg_size>\d+)_process_times\.csv$")
 
@@ -34,11 +36,12 @@ def load_latency_series(results_dir: Path) -> dict[int, np.ndarray]:
 
         channels = int(match.group("channels"))
         msg_size = int(match.group("msg_size"))
-        if channels not in TARGET_CHANNELS or msg_size != TARGET_MESSAGE_SIZE:
+        payload = channels * msg_size # bytes per message
+        if payload not in TARGET_PAYLOADS:
             continue
 
         data = np.atleast_1d(np.loadtxt(path, delimiter=","))
-        series[channels] = data.astype(float) * 1e6  # seconds -> microseconds
+        series[payload*8] = data.astype(float) * 1e6  # seconds -> microseconds
 
     return series
 
@@ -228,7 +231,7 @@ def main() -> None:
     fig.legend(
         handles,
         labels,
-        title="Number of channels",
+        title="Payload (channels × message size)",
         loc="upper center",
         ncol=min(5, len(labels)),
         frameon=False,
