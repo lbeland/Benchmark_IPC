@@ -1,2 +1,0 @@
--r install/requirements.txt
--e ./licorice
