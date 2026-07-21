@@ -1,0 +1,20 @@
+config:
+  tick_len: 100
+  num_ticks: 10000
+  source_init_ticks: 500
+  output_file: /home/linda/Documents/new_benchmark_test/Benchmark_IPC/licorice/rt_results/1_128
+signals:
+  message:
+    shape: (128,)
+    dtype: double
+modules:
+  producer:
+    language: python
+    constructor: true
+    out:
+    - message
+  consumer:
+    language: python
+    constructor: true
+    in:
+    - message

@@ -1,0 +1,763 @@
+#define _GNU_SOURCE
+{%- if parport_tick_addr is not none %}
+#include <linux/parport.h>
+#include <linux/ppdev.h>
+{%- endif %}
+#include <limits.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h> // includes <stdint.h>
+#include <pthread.h>
+#include <sched.h>
+#include <semaphore.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#ifdef __APPLE__
+  #include <sys/uio.h>
+#else
+  #include <sys/io.h>
+#endif
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "constants.h"
+#include "utilityFunctions.h"
+#ifdef __APPLE__
+#include "darwin_compat/clock_nanosleep.h"
+#endif
+
+
+#define TOPO_HEIGHT {{topo_height}}
+#define NUM_CHILD_PROCS {{num_child_procs}}
+#define NUM_SOURCES {{num_sources}}
+#define NUM_SINKS {{num_sinks}}
+#define NUM_MODULES {{num_modules}}
+
+// process IDs for each child numbered according to the index of the child's
+// name in childProcnames
+static pid_t ch_pids[NUM_CHILD_PROCS];
+static char childProcnames[NUM_CHILD_PROCS][MAX_CHILD_NAME_LEN] = {{'{'}}{% for n in child_names %}"{{n}}"{{ ", " if not loop.last else "" }}{% endfor %}{{'}'}};
+static char sourceProcnames[NUM_SOURCES][MAX_CHILD_NAME_LEN] = {{'{'}}{% for n in source_names %}"{{n}}"{{ ", " if not loop.last else "" }}{% endfor %}{{'}'}};
+static char moduleProcnames[NUM_MODULES][MAX_CHILD_NAME_LEN] = {{'{'}}{% for n in module_names %}"{{n}}"{{ ", " if not loop.last else "" }}{% endfor %}{{'}'}};
+static char sinkProcnames[NUM_SINKS][MAX_CHILD_NAME_LEN] = {{'{'}}{% for n in sink_names %}"{{n}}"{{ ", " if not loop.last else "" }}{% endfor %}{{'}'}};
+static int runnerTopoLens[TOPO_HEIGHT] = {{'{'}}{% for l in topo_widths %}{{l}}{{ ", " if not loop.last else ""}}{% endfor %}{{'}'}};
+static int runnerTopoOrder[TOPO_HEIGHT][{{topo_max_width}}] = {
+{% for row in topo_order %}
+  { {% for item in row %}{{ item }}, {% endfor %}},
+{% endfor %}
+};
+
+#define FOREACH_CHILD_TYPE(CHILD_TYPE) \
+        CHILD_TYPE(async_reader)       \
+        CHILD_TYPE(source)             \
+        CHILD_TYPE(module)             \
+        CHILD_TYPE(sink)               \
+        CHILD_TYPE(async_writer)       \
+
+#define GENERATE_ENUM(ENUM) ENUM,
+#define GENERATE_STRING(STRING) #STRING,
+
+enum CHILD_TYPE {
+    FOREACH_CHILD_TYPE(GENERATE_ENUM)
+};
+
+static const char *CHILD_TYPES[] = {
+    FOREACH_CHILD_TYPE(GENERATE_STRING)
+};
+
+typedef struct {
+  char name[MAX_CHILD_NAME_LEN];
+  enum CHILD_TYPE type;
+  bool async;
+  int cpu_affinity;
+} ChildDict;
+
+ChildDict childDicts[] = {
+{% for child in child_dicts %}
+  {
+    .name = "{{ child["name"] }}",
+    .type = {{ child["type"] }},
+    .async = {{ "true" if child["async"] else "false" }},
+    .cpu_affinity = {{ child["cpu_affinity"] }},
+  },
+{% endfor %}
+};
+
+{%- if parport_tick_addr is not none %}
+int parportMode;
+{%- endif %}
+
+// pointer to start of shared memory
+static size_t shm_size;
+static uint8_t *pmem;
+// global tick counter
+static int64_t *pNumTicks = NULL;
+static struct timespec *pClockMonotonicRaw;
+static struct timespec *pClockMonotonic;
+static struct timespec *pClockRealtime;
+// per-process tick start and end semaphores for sources, modules, and sinks
+// timer signals trigger each process by upping these semaphores
+// timer checks if process finished tick by downing (trywait) these semaphores
+static sem_t *pSourceUpSems[NUM_SOURCES];
+static sem_t *pSourceDownSems[NUM_SOURCES];
+static sem_t *pModUpSems[NUM_MODULES];
+static sem_t *pModDownSems[NUM_MODULES];
+static sem_t *pSinkUpSems[NUM_SINKS];
+static sem_t *pSinkDownSems[NUM_SINKS];
+// signal semaphores. synchronizes process hierarchy during runtime
+static sem_t *pSigSems[NUM_SEM_SIGS];
+// buffer for creating named semaphore names
+char semNameBuf[SEM_NAME_LEN];
+
+sigset_t exitMask;
+
+static int running = true;
+static int sigchld_recv;
+
+#ifndef __APPLE__
+static int num_cores = {{num_cores}};
+#endif
+static size_t ex_i, al_i;
+
+struct period_info {
+  struct timespec next_period;
+  long period_ns;
+  long period_s;
+  int parportfd;
+  int parportRet;
+  unsigned char outVal;
+};
+
+static void timer_init(struct period_info *pinfo) {
+
+  /* for simplicity, hardcoding a 1ms period */
+  pinfo->period_ns = TICK_LEN_NS;
+  pinfo->period_s = TICK_LEN_S;
+
+  pinfo->outVal = 0b00000001;
+
+{%- if parport_tick_addr is not none %}
+
+  // make sure parport is writeable
+  if ((pinfo->parportfd = open("/dev/parport{{parport_tick_addr}}", O_RDWR)) == -1) {
+    printf("parport open failed.\n");
+    running = 0;
+    return;
+  }
+  if (ioctl(pinfo->parportfd, PPCLAIM) == -1) {
+    printf("parport ioctl PPCLAIM failed.\n");
+    running = 0;
+    return;
+  }
+  parportMode = IEEE1284_MODE_COMPAT;
+  if (ioctl(pinfo->parportfd, PPNEGOT, &parportMode) == -1) /* 0 on success, -1 on failure */ {
+    printf("parport ioctl PPNEGOT failed.\n");
+    running = 0;
+    return;
+  }
+  if (ioctl(pinfo->parportfd, PPWDATA, &pinfo->outVal) == -1) {
+    printf("parport ioctl PPWDATA failed.\n");
+    running = 0;
+    return;
+  }
+{%- endif %}
+
+  printf("Timer thread started.\n");
+  fflush(stdout);
+
+  clock_gettime(CLOCK_MONOTONIC, &(pinfo->next_period));
+}
+
+void handle_exit(int exitStatus) {
+  int childStatus;
+  for (int i = NUM_CHILD_PROCS - 1; i >= 0; i--) {
+    if (ch_pids[i] && ch_pids[i] != -1) {
+      printf("Killing %s %s with pid: %d\n", CHILD_TYPES[childDicts[i].type], childDicts[i].name, ch_pids[i]);
+      fflush(stdout);
+      if (childDicts[i].async) {
+        kill(ch_pids[i], SIGINT);
+      }
+      kill(ch_pids[i], SIGTERM);
+      waitpid(ch_pids[i], &childStatus, 0);
+      printf("%s exited with status: %d\n", childDicts[i].name, childStatus);
+      fflush(stdout);
+    }
+  }
+
+  if (pNumTicks == NULL) {
+    printf("LiCoRICE ran for %" PRId64 " ticks.\n", (int64_t)(-1 * MODULE_INIT_TICKS));
+  }
+  else {
+    printf("LiCoRICE ran for %" PRId64 " ticks.\n", (int64_t)(*pNumTicks)+1);
+  }
+
+  printf("Unmapping shared memory...\n");
+
+  // close shared memory
+  munmap(pmem, shm_size);
+  shm_unlink(SMEM0_PATHNAME);
+  munlockall();
+
+  printf("Closing and unlinking semaphores...\n");
+  // close source semaphores
+  for (ex_i = 0; ex_i < NUM_SOURCES; ex_i++) {
+    sem_close(pSourceUpSems[ex_i]);
+    snprintf(semNameBuf, SEM_NAME_LEN, "/source_up_sem%lu", ex_i);
+    sem_unlink(semNameBuf);
+
+    sem_close(pSourceDownSems[ex_i]);
+    snprintf(semNameBuf, SEM_NAME_LEN, "/source_down_sem%lu", ex_i);
+    sem_unlink(semNameBuf);
+  }
+
+  // close module semaphores
+  for (ex_i = 0; ex_i < NUM_MODULES; ex_i++) {
+    sem_close(pModUpSems[ex_i]);
+    snprintf(semNameBuf, SEM_NAME_LEN, "/mod_up_sem_%lu", ex_i);
+    sem_unlink(semNameBuf);
+
+    sem_close(pModDownSems[ex_i]);
+    snprintf(semNameBuf, SEM_NAME_LEN, "/mod_down_sem_%lu", ex_i);
+    sem_unlink(semNameBuf);
+  }
+
+  // close sink semaphores
+  for (ex_i = 0; ex_i < NUM_SINKS; ex_i++) {
+    snprintf(semNameBuf, SEM_NAME_LEN, "/sink_up_sem_%lu", ex_i);
+    sem_close(pSinkUpSems[ex_i]);
+    sem_unlink(semNameBuf);
+
+    sem_close(pSinkDownSems[ex_i]);
+    snprintf(semNameBuf, SEM_NAME_LEN, "/sink_down_sem_%lu", ex_i);
+    sem_unlink(semNameBuf);
+  }
+
+  // close signal semaphores
+  for (ex_i = 0; ex_i < NUM_SEM_SIGS; ex_i++) {
+    sem_close(pSigSems[ex_i]);
+    snprintf(semNameBuf, SEM_NAME_LEN, "/sig_sem_%lu", ex_i);
+    sem_unlink(semNameBuf);
+  }
+
+  exit(exitStatus);
+}
+
+static void timer_cleanup(struct period_info *pinfo) {
+  {%- if parport_tick_addr is not none %}
+    pinfo->outVal = 0b10000000 & pinfo->outVal;
+    if (ioctl(pinfo->parportfd, PPWDATA, &pinfo->outVal) == -1) {
+      printf("parport ioctl PPWDATA failed.\n");
+      running = 0;
+      return;
+    }
+    if (ioctl(pinfo->parportfd, PPRELEASE) == -1) {
+      printf("parport ioctl PPRELEASE failed.");
+      running = 0;
+      return;
+    }
+    close(pinfo->parportfd);
+  {%- endif %}
+}
+
+#ifndef __APPLE__
+/*
+ * set scheduler to SCHED_FIFO with the given priority
+ */
+void set_sched_prior(int priority) {
+  struct sched_param param;
+  param.sched_priority = priority;
+  if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
+    die("pthread_setschedparam failed.\n");
+  }
+}
+#endif
+
+static void check_children(struct period_info *pinfo) {
+  // record current monotonic raw system time
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, pClockMonotonicRaw)) {
+      printf("monotonic clock_gettime failed,\n");
+      running = 0;
+      return;
+  }
+
+  // record current monotonic system time (NTP-affected)
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, pClockMonotonic)) {
+      printf("monotonic clock_gettime failed,\n");
+      running = 0;
+      return;
+  }
+
+  // record current realtime system time (NTP-affected)
+  if (clock_gettime(CLOCK_REALTIME, pClockRealtime)) {
+      printf("realtime clock_gettime failed,\n");
+      running = 0;
+      return;
+  }
+
+  // increment SIGALRM counter
+  (*pNumTicks)++;
+
+{%- if config["config"]["num_ticks"] != -1 %}
+  if (*pNumTicks >= {{config["config"]["num_ticks"]}}) {
+    (*pNumTicks)--;
+    running = 0;
+    return;
+  }
+{%- endif %}
+
+{%- if num_sources != 0 %}
+
+  for (al_i = 0; al_i < NUM_SOURCES; al_i++) {
+    if (sem_trywait(pSourceDownSems[al_i])) {
+      printf(
+        "Source timing violation on tick: %" PRId64 " from source %s\n",
+        *pNumTicks,
+        sourceProcnames[al_i]
+      );
+      fflush(stdout);
+      // Quit on source timing violation
+      if (*pNumTicks >= 0) {
+        running = 0;
+        return;
+      }
+    }
+  }
+{%- endif %}
+
+  // Trigger sources but not modules
+  if(*pNumTicks < (-1 * MODULE_INIT_TICKS)){
+    for (al_i = 0; al_i < NUM_SOURCES; al_i++) {
+      sem_post(pSourceUpSems[al_i]);
+    }
+  }
+  // Trigger sources and modules, but not sinks
+  else if(*pNumTicks < 0) {
+    for (al_i = 0; al_i < NUM_SOURCES; al_i++) {
+      sem_post(pSourceUpSems[al_i]);
+    }
+
+    for (al_i = 0; al_i < NUM_MODULES; al_i++) {
+      sem_post(pModUpSems[al_i]);
+    }
+  }
+
+  // normal behavior on subsequent iterations (trigger all children)
+  else {
+{%- if parport_tick_addr is not none %}
+    // flip bits and output to parallel port
+    if (pinfo->outVal == 0b00000001) {
+      pinfo->outVal = 0b10000001;
+    }
+    else {
+      pinfo->outVal = 0b00000001;
+    }
+    if (ioctl(pinfo->parportfd, PPWDATA, &pinfo->outVal) == -1) {
+      printf("parport ioctl failed,\n");
+      running = 0;
+      return;
+    }
+{%- endif %}
+
+{%- if num_modules != 0 %}
+
+    // check if modules have finished execution in allotted time (could just check last round, but need to properly figure val topo stuff again)
+    for (al_i = 0; al_i < NUM_MODULES; al_i++) {
+      if (sem_trywait(pModDownSems[al_i])) {
+        printf(
+          "Module timing violation on tick: %" PRId64 " from module %s\n",
+          *pNumTicks,
+          moduleProcnames[al_i]
+        );
+        fflush(stdout);
+        running = 0;
+        return;
+      }
+    }
+{%- endif %}
+
+{%- if num_sinks != 0 %}
+
+    // check if sink have finished execution in allotted time (could just check last round, but need to properly figure val topo stuff again)
+    for (al_i = 0; al_i < NUM_SINKS; al_i++) {
+      if(sem_trywait(pSinkDownSems[al_i])){
+        // printf(
+        //   "Sink timing violation on tick: %" PRId64 " from sink %s\n",
+        //   *pNumTicks,
+        //   sinkProcnames[al_i]
+        // );
+        // fflush(stdout);
+      }
+    }
+{%- endif %}
+
+    for (al_i = 0; al_i < NUM_SOURCES; al_i++) {
+      sem_post(pSourceUpSems[al_i]);
+    }
+
+    for (al_i = 0; al_i < NUM_MODULES; al_i++) {
+      sem_post(pModUpSems[al_i]);
+    }
+
+    for (al_i = 0; al_i < NUM_SINKS; al_i++) {
+      sem_post(pSinkUpSems[al_i]);
+    }
+  }
+}
+
+
+void exit_handler(int signum) {
+  running = false;
+}
+
+
+void chld_handler(int signum) {
+  sigchld_recv++;
+  running = false;
+}
+
+
+void usr1_handler(int signum) {
+  //do nothing, this sig is just used for communication
+}
+
+
+void usr2_handler(int signum) {
+  //do nothing, this sig is just used for communication
+}
+
+
+void dead_child() {
+  --sigchld_recv;
+  int saved_errno = errno;
+  int dead_pid;
+  printf("I have lost a child :( errno: %d \n", saved_errno);
+  fflush(stdout);
+
+  while ((dead_pid = waitpid((pid_t)(-1), 0, WNOHANG)) == 0);
+  printf("dead pid: %d \n", dead_pid);
+  fflush(stdout);
+  for (int i = 0; i < NUM_CHILD_PROCS; i++) {
+    if (ch_pids[i] == dead_pid) {
+      ch_pids[i] = -1;
+    }
+  }
+
+  errno = saved_errno;
+
+  running = 0;
+  return;
+}
+
+
+static void wait_rest_of_period(struct period_info *pinfo) {
+  pinfo->next_period.tv_nsec += pinfo->period_ns;
+  pinfo->next_period.tv_sec += pinfo->period_s;
+
+  while (pinfo->next_period.tv_nsec >= 1000000000) {
+    /* timespec nsec overflow */
+    pinfo->next_period.tv_sec++;
+    pinfo->next_period.tv_nsec -= 1000000000;
+  }
+
+  /* for simplicity, ignoring possibilities of signal wakes */
+  if (clock_nanosleep(
+    CLOCK_MONOTONIC, TIMER_ABSTIME, &pinfo->next_period, NULL
+  )){
+      die("clock_nanosleep failed \n");
+  }
+}
+
+
+void *timer_task(void *data) {
+  struct period_info pinfo;
+
+  timer_init(&pinfo);
+
+  while (running) {
+    check_children(&pinfo);
+    wait_rest_of_period(&pinfo);
+  }
+
+  if (sigchld_recv) {
+    dead_child();
+  }
+
+  timer_cleanup(&pinfo);
+
+  return NULL;
+}
+
+int run_child_process(char *procName, ChildDict *child) {
+  int ch_pid;
+
+  // fork and exec child process
+  if ((ch_pid = fork()) == -1) {
+    die("fork failed \n");
+  }
+  if (ch_pid == 0) { // only runs for child
+#ifndef __APPLE__
+    int cpu_affinity = child->cpu_affinity;
+    int priority = TIMER_PRIORITY - 1;
+
+    // create CPU affinity mask for runner
+    cpu_set_t cpu_affinity_mask;
+    CPU_ZERO(&cpu_affinity_mask);
+    for (int i = 0; i < num_cores; i++) {
+      if ((1 << i) & cpu_affinity) {
+        CPU_SET(i, &cpu_affinity_mask);
+      }
+    }
+    fflush(stdout);
+
+    if (sched_setaffinity(0, sizeof(cpu_affinity_mask), &cpu_affinity_mask)) {
+      perror("sched_setaffinity failed");
+      printf("Could not assign %s to 0x%x\n", procName+2, cpu_affinity);
+      fflush(stdout);
+      exit(EXIT_FAILURE);
+    }
+     /* Check the actual affinity mask assigned to the thread. */
+    sched_getaffinity(0, sizeof(cpu_affinity_mask), &cpu_affinity_mask);
+    cpu_affinity = 0;
+    printf("%s CPU affinity: ", procName+2);
+    for (int i = 0; i < num_cores; i++) {
+      if (CPU_ISSET(i, &cpu_affinity_mask)) {
+        cpu_affinity += 1 << i;
+      }
+    }
+    printf("0x%x\n", cpu_affinity);
+    fflush(stdout);
+
+    setpriority(PRIO_PROCESS, 0, -19);
+    if (child->async) {
+      // TODO determine best priority for async procs
+      // priority += 1;
+      priority -= 1;
+      set_sched_prior(priority);
+    }
+    else {
+      set_sched_prior(priority);
+    }
+#else
+    // TODO implement Darwin CPU affinity
+    // TODO implement Darwin priority
+#endif
+    char* argv[2] = {procName, NULL};
+
+    // execute source process
+    // signal handlers and mmap are not preserved on exec
+    execvp(argv[0],argv);
+    printf("%s: child exec error. %s\n", procName, strerror(errno));
+    exit(EXIT_FAILURE);
+    //in case execvp fails
+  }
+  return ch_pid;
+}
+
+/*
+ * Timer parent main
+ */
+int main(int argc, char* argv[]) {
+  struct sched_param param;
+  pthread_attr_t attr;
+  pthread_t thread;
+
+  char childExecName[MAX_CHILD_NAME_LEN + 2];
+
+  // set signal masks
+  sigemptyset(&exitMask);
+
+  // initialize utilityFunctions
+  init_utils(&handle_exit, &exitMask);
+
+  // set signal handlers
+  set_sighandler(SIGINT, &exit_handler, &exitMask);
+  set_sighandler(SIGUSR1, &usr1_handler, NULL);
+  set_sighandler(SIGUSR2, &usr2_handler, NULL);
+  set_sighandler(SIGCHLD, &chld_handler, NULL);
+  printf("Handlers installed.\n");
+  fflush(stdout);
+
+  printf("Timer parent pid: %d\n", getpid());
+  fflush(stdout);
+
+  // create shared memory and map it
+  printf("Mapping memory...\n");
+  fflush(stdout);
+  shm_size = ROUND_UP(SHM_SIZE, PAGESIZE);
+  open_shared_mem(
+    &pmem,
+    SMEM0_PATHNAME,
+    shm_size,
+    O_TRUNC | O_CREAT | O_RDWR,
+    PROT_READ | PROT_WRITE
+  );
+  pNumTicks = (int64_t *)(pmem + NUM_TICKS_OFFSET);
+  pClockMonotonicRaw = (struct timespec *)(pmem + CLOCK_MONOTONIC_RAW_OFFSET);
+  pClockMonotonic = (struct timespec *)(pmem + CLOCK_MONOTONIC_OFFSET);
+  pClockRealtime = (struct timespec *)(pmem + CLOCK_REALTIME_OFFSET);
+  *pNumTicks = (-1 * (SOURCE_INIT_TICKS + MODULE_INIT_TICKS)) - 1;
+
+  // initialize source semaphores
+  for (int i = 0; i < NUM_SOURCES; i++) {
+    snprintf(semNameBuf, SEM_NAME_LEN, "/source_up_sem_%d", i);
+    pSourceUpSems[i] = create_semaphore(semNameBuf, 0);
+
+    snprintf(semNameBuf, SEM_NAME_LEN, "/source_down_sem_%d", i);
+    pSourceDownSems[i] = create_semaphore(semNameBuf, 1);
+  }
+
+  // initialize module semaphores
+  for (int i = 0; i < NUM_MODULES; i++) {
+    snprintf(semNameBuf, SEM_NAME_LEN, "/mod_up_sem_%d", i);
+    pModUpSems[i] = create_semaphore(semNameBuf, 0);
+
+    snprintf(semNameBuf, SEM_NAME_LEN, "/mod_down_sem_%d", i);
+    pModDownSems[i] = create_semaphore(semNameBuf, 1);
+  }
+
+  // initialize sink semaphores
+  for (int i = 0; i < NUM_SINKS; i++) {
+    snprintf(semNameBuf, SEM_NAME_LEN, "/sink_up_sem_%d", i);
+    pSinkUpSems[i] = create_semaphore(semNameBuf, 0);
+
+    snprintf(semNameBuf, SEM_NAME_LEN, "/sink_down_sem_%d", i);
+    pSinkDownSems[i] = create_semaphore(semNameBuf, 1);
+  }
+
+  // initialize signal semaphores
+  for (int i = 0; i < NUM_SEM_SIGS; i++) {
+    snprintf(semNameBuf, SEM_NAME_LEN, "/sig_sem_%d", i);
+    pSigSems[i] = create_semaphore(semNameBuf, 0);
+  }
+
+  printf("Memory mapped.\nForking children...\n");
+  fflush(stdout);
+
+  for (int i = 0; i < TOPO_HEIGHT; i++) {
+    for (int j = 0; j < runnerTopoLens[i]; j++) {
+      // create runner executable name
+      int child_num = runnerTopoOrder[i][j];
+      printf("Forking: %s\n", childProcnames[child_num]);
+      fflush(stdout);
+      sprintf(childExecName, "./%s", childProcnames[child_num]);
+
+      ch_pids[child_num] = run_child_process(
+        childExecName, &childDicts[child_num]
+      );
+
+      pause();
+
+      if (sigchld_recv) {
+        dead_child();
+        die("%s unable to start up.\n", childProcnames[child_num]);
+      }
+
+      printf("%s up.\n", childProcnames[child_num]);
+      fflush(stdout);
+    }
+  }
+  printf("Runners (sources, modules, and sinks) ready. Child PIDs: \n");
+  for (int i = 0; i < NUM_CHILD_PROCS; i++) {
+    printf("%s: %d\n", childProcnames[i], ch_pids[i]);
+  }
+  fflush(stdout);
+
+
+{%- if platform_system != "Darwin" %}
+  make_realtime();
+{%- endif %}
+
+  for (int i = 0; i < NUM_CHILD_PROCS; i++) {
+    if (childDicts[i].type == async_reader) {
+      kill(ch_pids[i], SIGUSR2);
+    }
+    else if (childDicts[i].type == source) {
+      kill(ch_pids[i], SIGUSR2);
+    }
+  }
+
+  printf("Sources signaled to start reading data.\n");
+
+  // set up timer
+
+  /* Initialize pthread attributes (default values) */
+  if (pthread_attr_init(&attr)) {
+    die("init pthread attributes failed\n");
+  }
+
+  // TODO: https://rt.wiki.kernel.org/index.php/Threaded_RT-application_with_memory_locking_and_stack_handling_example
+  /* Set a specific stack size  */
+  if (pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN)) {
+    die("pthread setstacksize failed\n");
+  }
+
+  /* Set scheduler policy and priority of pthread */
+  if (pthread_attr_setschedpolicy(&attr, SCHED_FIFO)) {
+    die("pthread setschedpolicy failed\n");
+  }
+
+  param.sched_priority = TIMER_PRIORITY;
+  if (pthread_attr_setschedparam(&attr, &param)) {
+    die("pthread setschedparam failed\n");
+  }
+
+  if (pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED)) {
+    die("pthread setinheritsched failed\n");
+  }
+
+  /* Set affinity mask to include CPUs 1. */
+  // TODO expose this as config var
+#ifndef __APPLE__
+  cpu_set_t timer_cpu_affinity;
+  CPU_ZERO(&timer_cpu_affinity);
+  for (int i = 0; i < num_cores; i++) {
+    if ((1 << i) & TIMER_MASK) {
+      CPU_SET(i, &timer_cpu_affinity);
+    }
+  }
+
+  if (pthread_attr_setaffinity_np(
+    &attr, sizeof(timer_cpu_affinity), &timer_cpu_affinity)
+  ) {
+    die("pthread setaffinity_np failed\n");
+  }
+
+   /* Check the actual affinity mask assigned to the thread. */
+  if (pthread_attr_getaffinity_np
+    (&attr, sizeof(timer_cpu_affinity), &timer_cpu_affinity)
+  ) {
+    die("pthread getaffinity_np failed\n");
+  }
+  printf("Timer CPU affinity:\n");
+  for (int i = 0; i < num_cores; i++) {
+    if (CPU_ISSET(i, &timer_cpu_affinity)) {
+      printf("  CPU %d\n", i);
+      fflush(stdout);
+    }
+  }
+#endif
+
+  printf("Starting timer thread...\n");
+  fflush(stdout);
+  if (pthread_create(&thread, &attr, timer_task, NULL)) {
+    perror("Error: ");
+    die("create pthread failed\n");
+  }
+
+  if (pthread_join(thread, NULL)) {
+    die("join pthread failed\n");
+  }
+
+  handle_exit(0);
+}

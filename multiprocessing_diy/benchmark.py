@@ -14,6 +14,7 @@ def main():
     parser.add_argument("--msg_size", type=int, default=1)
     parser.add_argument("--num_channels", type=int, default=1)
     parser.add_argument("--max_buffer_size", type=int, default=16)
+    parser.add_argument("--t_wait", type=float, default=0.0001)
     parser.add_argument("--output_file", type=str, default="Producer.csv")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -54,6 +55,7 @@ def main():
             "--num_channels", str(args.num_channels),
             "--msg_size", str(args.msg_size),
             "--max_buffer_size", str(args.max_buffer_size),
+            "--t_wait", str(args.t_wait),
             "--output_file", f"{result_folder}/{args.num_channels}_{args.msg_size}"
         ],
         preexec_fn=os.setsid,
@@ -61,8 +63,8 @@ def main():
 
     try:
         # 3. Wait for completion
-        producer.wait(10)
-        consumer.wait(10)
+        producer.wait(args.t_wait * args.n_messages * 2)  # generous timeout
+        consumer.wait(args.t_wait * args.n_messages * 2)
     except KeyboardInterrupt:
         terminate(producer)
         terminate(consumer)

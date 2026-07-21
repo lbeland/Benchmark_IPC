@@ -1,2 +1,10 @@
 **/venv/*
 *.png
+
+**/*.csv
+
+# licorice build artifacts
+licorice/benchmark.lico/
+licorice/benchmark.lico.stale.*/
+**/__pycache__/
+**/*.egg-info/

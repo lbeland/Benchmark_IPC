@@ -1,0 +1,15 @@
+cython
+numpy
+llvmlite
+scipy
+cycler
+posix_ipc
+pyparallel
+pyyaml
+sharedarray
+numba
+psutil
+matplotlib
+msgpack
+jinja2
+toposort

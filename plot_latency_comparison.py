@@ -143,8 +143,8 @@ def style_line_axis(ax: plt.Axes, side: str, ylabel: str | None = None) -> None:
 
     ax.set_xlabel("Message index")
     ax.set_yscale("log")
-    ax.grid(True, which="major", alpha=0.7, linewidth=0.8)
-    ax.grid(True, which="minor", alpha=0.5, linewidth=0.5)
+    ax.grid(True, axis="y", which="major", alpha=0.7, linewidth=0.8)
+    ax.grid(True, axis="y", which="minor", alpha=0.7, linewidth=0.8)
     # ax.spines["top"].set_visible(False)
 
 
@@ -163,8 +163,8 @@ def style_hist_axis(ax: plt.Axes, side: str, xlabel: str = "Count") -> None:
     ax.set_xlabel(xlabel)
     ax.set_yscale("log")
     # ax.grid(True, axis="x", alpha=0.22, linewidth=0.8)
-    ax.grid(True, which="major", alpha=0.7, linewidth=0.8)
-    ax.grid(True, which="minor", alpha=0.5, linewidth=0.5)
+    ax.grid(True, axis="y", which="major", alpha=0.7, linewidth=0.8)
+    ax.grid(True, axis="y", which="minor", alpha=0.7, linewidth=0.8)
     # ax.spines["top"].set_visible(False)
 
 
@@ -216,11 +216,10 @@ def main() -> None:
     ax_zero_line.set_ylim(y_min, y_max)
     ax_zero_line.set_title("ZeroMQ")
     ax_falcon_line.set_title("Falcon")
-    ax_zero_hist.set_title("Distribution")
-    ax_falcon_hist.set_title("Distribution")
 
-    ax_zero_hist.tick_params(labelleft=False, labelright=False)
-    ax_falcon_hist.tick_params(labelright=False, labelleft=False)
+    ax_zero_hist.tick_params(axis="y", which="both", labelleft=False, labelright=False, left=False, right=False)
+    ax_falcon_hist.tick_params(axis="y", which="both", labelleft=False, labelright=False, left=False, right=False)
+
 
     # Reduce clutter in the center
     ax_zero_hist.spines["left"].set_visible(False)

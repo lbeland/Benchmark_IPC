@@ -39,6 +39,7 @@ def main() -> None:
     parser.add_argument("--num_channels", type=int, default=1)
     parser.add_argument("--output_file", type=str, default="producer_metric.csv")
     parser.add_argument("--max_buffer_size", type=int, default=10)  # not used
+    parser.add_argument("--t_wait", type=float, default=0.0001)
     args = parser.parse_args()
 
     # Payload is a float64 array; first element carries the timestamp.
@@ -65,6 +66,8 @@ def main() -> None:
             conn.send_bytes(payload_view)
 
         for _ in range(args.n_messages):
+            if args.t_wait > 0:
+                time.sleep(args.t_wait)  # Let Consumer process last message
             now = time.monotonic()
             struct.pack_into("d", payload, 0, now)
             conn.send_bytes(payload_view)

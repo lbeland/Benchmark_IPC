@@ -8,11 +8,11 @@ import time
 
 # Configuration
 N_MESSAGES = 10000
-NUM_CHANNELS_LIST = [1, 5, 20, 40]
+NUM_CHANNELS_LIST =[1, 5, 20, 40]
 MSG_SIZES = [1, 128, 256, 512, 1024, 2048, 4096]
 MAX_BUFFER = 16
-T_WAIT = 0.0001
-OVERWRITE = False
+T_WAIT = 0.001  # 1ms
+OVERWRITE = True
 
 current_channels = None
 current_msg_size = None
@@ -140,20 +140,20 @@ def main():
                 print(f"Running benchmarks Dareplane: "f"channels={num_channels}, msg_size={msg_size}")
                 run_benchmark("./dareplane", "venv", num_channels, msg_size)
 
-                print(f"Running benchmarks Bifrost: channels={num_channels}, msg_size={msg_size}")
-                run_benchmark("./bifrost", "venv", num_channels, msg_size)
+                # print(f"Running benchmarks Bifrost: channels={num_channels}, msg_size={msg_size}")
+                # run_benchmark("./bifrost", "venv", num_channels, msg_size)
 
-                print(f"Running benchmarks Zeromq_diy: channels={num_channels}, msg_size={msg_size}")
-                run_benchmark("./zeromq_diy", "venv", num_channels, msg_size)
+                # print(f"Running benchmarks Zeromq_diy: channels={num_channels}, msg_size={msg_size}")
+                # run_benchmark("./zeromq_diy", "venv", num_channels, msg_size)
 
-                print(f"Running benchmarks Brand-tutorial: channels={num_channels}, msg_size={msg_size}")
-                run_benchmark("./brand-tutorial", "rt", num_channels, msg_size)
+                # print(f"Running benchmarks Brand-tutorial: channels={num_channels}, msg_size={msg_size}")
+                # run_benchmark("./brand-tutorial", "rt", num_channels, msg_size)
 
-                print(f"Running benchmarks Falcon: channels={num_channels}, msg_size={msg_size}")
-                run_benchmark("./falcon-core-develop", "venv", num_channels, msg_size)
+                # print(f"Running benchmarks Falcon: channels={num_channels}, msg_size={msg_size}")
+                # run_benchmark("./falcon-core-develop", "venv", num_channels, msg_size)
 
-                print(f"Running benchmarks Multiprocessing: channels={num_channels}, msg_size={msg_size}")
-                run_benchmark("./multiprocessing_diy", "venv", num_channels, msg_size)
+                # print(f"Running benchmarks Multiprocessing: channels={num_channels}, msg_size={msg_size}")
+                # run_benchmark("./multiprocessing_diy", "venv", num_channels, msg_size)
 
     except KeyboardInterrupt:
         print("\nStopped by user.")
