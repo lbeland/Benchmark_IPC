@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Consumer node that receives messages via Python multiprocessing IPC.
 
-Minimal fast-path version: receives raw bytes over a Unix domain socket using
-`multiprocessing.connection.Listener`.
+ using multiprocessing.connection.Listener.
 """
 
 from __future__ import annotations
@@ -128,19 +127,14 @@ def main() -> None:
         else:
             throughput = float("nan")
 
-        with open(args.output_file + "_Consumer.csv", "w", newline="") as f:
+        base = args.output_file[:-4] if args.output_file.lower().endswith('.csv') else args.output_file
+        with open(base + "_Consumer.csv", "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["Metric", "Recv_period", "Latency", "Throughput"])
             writer.writerow(["mean", f"{mean_recv_us}", f"{mean_lat_us}", f"{throughput}"])
             writer.writerow(["std", f"{std_recv_us}", f"{std_lat_us}", ""])
             writer.writerow(["max", f"{max_recv_us}", f"{max_lat_us}", ""])
-
-        with open(args.output_file + "_recv_times.csv", "w", newline="") as f:
-            if len(recv_times) >= 2:
-                for a, b in zip(recv_times, recv_times[1:]):
-                    f.write(f"{b - a}\n")
-
-        with open(args.output_file + "_process_times.csv", "w", newline="") as f:
+        with open(base + "_process_times.csv", "w", newline="") as f:
             for v in process_times:
                 f.write(f"{v}\n")
 

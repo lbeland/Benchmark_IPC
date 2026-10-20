@@ -12,9 +12,10 @@ import csv
 import math
 import os
 import statistics
-import struct
 import time
 from multiprocessing.connection import Client
+
+import numpy as np
 
 
 WARMUP_MESSAGES = 500
@@ -42,13 +43,14 @@ def main() -> None:
     parser.add_argument("--t_wait", type=float, default=0.0001)
     args = parser.parse_args()
 
-    # Payload is a float64 array; first element carries the timestamp.
+    # Payload is a float64 array; every element carries the send timestamp.
     n_f64 = int(args.num_channels) * int(args.msg_size)
     if n_f64 < 1:
         raise SystemExit("--num_channels * --msg_size must be >= 1")
 
     payload = bytearray(n_f64 * 8)
     payload_view = memoryview(payload)
+    payload_arr = np.frombuffer(payload, dtype=np.float64)  # writable view onto payload
     send_times: list[float] = []
 
     conn = None
@@ -62,14 +64,14 @@ def main() -> None:
         # Warmup: stabilize the stream before measurements.
         for _ in range(WARMUP_MESSAGES):
             now = time.monotonic()
-            struct.pack_into("d", payload, 0, now)
+            payload_arr[:] = now
             conn.send_bytes(payload_view)
 
         for _ in range(args.n_messages):
             if args.t_wait > 0:
                 time.sleep(args.t_wait)  # Let Consumer process last message
             now = time.monotonic()
-            struct.pack_into("d", payload, 0, now)
+            payload_arr[:] = now
             conn.send_bytes(payload_view)
             send_times.append(now)
 

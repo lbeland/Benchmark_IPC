@@ -32,7 +32,7 @@ def main():
     consumer = subprocess.Popen(
         [
             "sudo", "chrt", "-f", "99",
-            "taskset", "-c", "5",
+            "taskset", "-c", "7",
             f"{REPO_ROOT}/venv/bin/python3",
             f"{REPO_ROOT}/consumer.py",
             "--n_messages",  str(args.n_messages),
